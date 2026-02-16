@@ -33,9 +33,16 @@ async function sendAdminMail(subject, text) {
 }
 
 function buildCriteriaText() {
+  const authorizedCnameIps = Array.isArray(config.UI_CNAME_AUTHORIZED_IPS)
+    ? config.UI_CNAME_AUTHORIZED_IPS.filter(Boolean)
+    : [];
+  const cnameRule = authorizedCnameIps.length > 0
+    ? `- CNAME chain must resolve to authorized IP(s): ${sanitizeForLogAndEmail(authorizedCnameIps.join(', '), 500)}`
+    : `- CNAME must include: ${sanitizeForLogAndEmail(config.UI_CNAME_EXPECTED, 200)}`;
+
   return [
     'Email forwarding DNS requirements:',
-    `- CNAME must include: ${sanitizeForLogAndEmail(config.UI_CNAME_EXPECTED, 200)}`,
+    cnameRule,
     `- MX must include: ${sanitizeForLogAndEmail(config.EMAIL_MX_EXPECTED_HOST, 200)} priority ${sanitizeForLogAndEmail(config.EMAIL_MX_EXPECTED_PRIORITY, 50)}`,
     `- SPF TXT must include: ${sanitizeForLogAndEmail(config.EMAIL_SPF_EXPECTED, 200)}`,
     `- DMARC TXT must include: ${sanitizeForLogAndEmail(config.EMAIL_DMARC_EXPECTED, 200)}`

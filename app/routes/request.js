@@ -7,6 +7,7 @@ const { checkEmail } = require('../dns/checker');
 const jobs = require('../jobs/runner');
 const mailer = require('../mailer');
 const { buildResultPayload } = require('../util/result');
+const { markDomainAsActive } = require('../util/domain-activation');
 
 const router = express.Router();
 
@@ -61,8 +62,9 @@ async function runImmediateCheck(row) {
       "UPDATE dns_requests SET status = ?, activated_at = ?, updated_at = NOW() WHERE id = ? AND status = 'PENDING'",
       ['ACTIVE', nowDate, row.id]
     );
+    const statusActivated = Boolean(result && result.affectedRows > 0);
 
-    if (result && result.affectedRows > 0) {
+    if (statusActivated) {
       log(`Status updated for ${row.type} ${row.target}: ACTIVE`);
     }
 
@@ -77,6 +79,10 @@ async function runImmediateCheck(row) {
       });
     } catch (err) {
       log(`Failed to send ACTIVE email for ${row.type} ${row.target}: ${err.message}`);
+    }
+
+    if (statusActivated) {
+      await markDomainAsActive(row.target);
     }
   }
 

@@ -47,6 +47,9 @@ function withMissingNames(missing, target) {
 }
 
 function fallbackMissing(target) {
+  const expectedCnameIps = Array.isArray(config.UI_CNAME_AUTHORIZED_IPS)
+    ? config.UI_CNAME_AUTHORIZED_IPS
+    : [];
   return [
     {
       key: 'CNAME',
@@ -54,7 +57,8 @@ function fallbackMissing(target) {
       name: target,
       expected: config.UI_CNAME_EXPECTED,
       found: [],
-      ok: false
+      ok: false,
+      expected_ips: expectedCnameIps.length > 0 ? expectedCnameIps : undefined
     },
     {
       key: 'MX',

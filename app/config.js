@@ -35,6 +35,16 @@ if (invalidServers.length > 0) {
   throw new Error(`Invalid DNS_SERVERS entries (must be IPs): ${invalidServers.join(', ')}`);
 }
 
+const uiCnameAuthorizedIps = process.env.UI_CNAME_AUTHORIZED_IPS
+  ? process.env.UI_CNAME_AUTHORIZED_IPS.split(',').map((ip) => ip.trim()).filter(Boolean)
+  : [];
+const invalidUiCnameAuthorizedIps = uiCnameAuthorizedIps.filter((ip) => net.isIP(ip) === 0);
+if (invalidUiCnameAuthorizedIps.length > 0) {
+  throw new Error(
+    `Invalid UI_CNAME_AUTHORIZED_IPS entries (must be IPs): ${invalidUiCnameAuthorizedIps.join(', ')}`
+  );
+}
+
 const dbPoolConnectionLimit = Math.max(
   1,
   toInt(process.env.DB_POOL_CONNECTION_LIMIT || '10', 'DB_POOL_CONNECTION_LIMIT')
@@ -109,6 +119,11 @@ const config = {
   CHECKDNS_TOKEN: process.env.CHECKDNS_TOKEN ? process.env.CHECKDNS_TOKEN.trim() : '',
 
   UI_CNAME_EXPECTED: (process.env.UI_CNAME_EXPECTED || 'forward.haltman.io').toLowerCase(),
+  UI_CNAME_AUTHORIZED_IPS: uiCnameAuthorizedIps,
+  UI_CNAME_MAX_CHAIN_DEPTH: Math.max(
+    1,
+    toInt(process.env.UI_CNAME_MAX_CHAIN_DEPTH || '10', 'UI_CNAME_MAX_CHAIN_DEPTH')
+  ),
   EMAIL_MX_EXPECTED_HOST: (process.env.EMAIL_MX_EXPECTED_HOST || 'mail.abin.lat').toLowerCase(),
   EMAIL_MX_EXPECTED_PRIORITY: toInt(process.env.EMAIL_MX_EXPECTED_PRIORITY || '10', 'EMAIL_MX_EXPECTED_PRIORITY'),
   EMAIL_SPF_EXPECTED: process.env.EMAIL_SPF_EXPECTED || 'v=spf1 mx -all',

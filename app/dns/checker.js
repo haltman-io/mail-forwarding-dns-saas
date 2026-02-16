@@ -31,6 +31,54 @@ function isNotFoundError(err) {
   return err && (err.code === 'ENODATA' || err.code === 'ENOTFOUND' || err.code === 'NXDOMAIN');
 }
 
+function normalizeIp(ip) {
+  if (!ip) return ip;
+  return String(ip).trim().toLowerCase();
+}
+
+function normalizeSpfRecord(value) {
+  if (typeof value !== 'string') return '';
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function isAllMechanism(token) {
+  return /^[+?~-]?all$/i.test(token || '');
+}
+
+function getExpectedSpfMinimumTokens(expectedSpf) {
+  const normalized = normalizeSpfRecord(expectedSpf);
+  const tokens = normalized.split(' ').filter(Boolean);
+  if (tokens.length === 0 || tokens[0] !== 'v=spf1') return [];
+
+  const contentTokens = tokens.slice(1);
+  if (contentTokens.length === 0) return [];
+
+  const withoutPolicyAtEnd = isAllMechanism(contentTokens[contentTokens.length - 1])
+    ? contentTokens.slice(0, -1)
+    : contentTokens;
+
+  return withoutPolicyAtEnd.filter((token) => !isAllMechanism(token));
+}
+
+function isSpfRecordValidWithMinimum(record, requiredTokens) {
+  const normalized = normalizeSpfRecord(record);
+  const tokens = normalized.split(' ').filter(Boolean);
+
+  if (tokens.length < 2 || tokens[0] !== 'v=spf1') return false;
+  if (!isAllMechanism(tokens[tokens.length - 1])) return false;
+
+  const mechanisms = tokens.slice(1, -1).filter((token) => !isAllMechanism(token));
+  if (mechanisms.length === 0) return false;
+
+  const mechanismSet = new Set(mechanisms);
+  return requiredTokens.every((token) => mechanismSet.has(token));
+}
+
+function isSpfSatisfied(records, expectedSpf) {
+  const requiredTokens = getExpectedSpfMinimumTokens(expectedSpf);
+  return records.some((record) => isSpfRecordValidWithMinimum(record, requiredTokens));
+}
+
 function hashValues(values) {
   const hash = crypto.createHash('sha256');
   for (const value of values) {
@@ -71,6 +119,105 @@ async function resolveTxtSafe(target) {
     if (isNotFoundError(err)) return [];
     throw err;
   }
+}
+
+async function resolveA4Safe(target) {
+  try {
+    const records = await withTimeout(dnsPromises.resolve4(target), config.DNS_TIMEOUT_MS, 'A');
+    return records.map(normalizeIp);
+  } catch (err) {
+    if (isNotFoundError(err)) return [];
+    throw err;
+  }
+}
+
+async function resolveA6Safe(target) {
+  try {
+    const records = await withTimeout(dnsPromises.resolve6(target), config.DNS_TIMEOUT_MS, 'AAAA');
+    return records.map(normalizeIp);
+  } catch (err) {
+    if (isNotFoundError(err)) return [];
+    throw err;
+  }
+}
+
+async function resolveCnameChainToAuthorizedIp(startHost, authorizedIps, maxDepth) {
+  const normalizedAuthorizedIps = new Set(
+    (authorizedIps || []).map(normalizeIp).filter(Boolean)
+  );
+  const start = normalizeHost(startHost);
+  const visited = new Set();
+  let depth = 0;
+  let currentHosts = start ? [start] : [];
+  let sawCname = false;
+  let loopDetected = false;
+
+  const chain = [];
+  const resolvedIps = new Set();
+
+  while (currentHosts.length > 0 && depth < maxDepth) {
+    const nextHosts = [];
+
+    for (const rawHost of currentHosts) {
+      const host = normalizeHost(rawHost);
+      if (!host) continue;
+
+      if (visited.has(host)) {
+        loopDetected = true;
+        continue;
+      }
+
+      visited.add(host);
+      chain.push(host);
+
+      const cnameRecords = await resolveCnameSafe(host);
+      if (cnameRecords.length > 0) {
+        sawCname = true;
+        for (const cname of cnameRecords) {
+          const normalized = normalizeHost(cname);
+          if (normalized) nextHosts.push(normalized);
+        }
+        continue;
+      }
+
+      const aRecords = await resolveA4Safe(host);
+      const aaaaRecords = await resolveA6Safe(host);
+      const ips = [...aRecords, ...aaaaRecords].map(normalizeIp).filter(Boolean);
+
+      for (const ip of ips) {
+        resolvedIps.add(ip);
+        if (sawCname && normalizedAuthorizedIps.has(ip)) {
+          return {
+            ok: true,
+            chain,
+            resolvedIps: Array.from(resolvedIps),
+            reason: 'authorized_ip_match',
+            reachedMaxDepth: false,
+            loopDetected
+          };
+        }
+      }
+    }
+
+    if (nextHosts.length === 0) break;
+    currentHosts = Array.from(new Set(nextHosts));
+    depth += 1;
+  }
+
+  const reachedMaxDepth = currentHosts.length > 0 && depth >= maxDepth;
+  let reason = 'authorized_ip_not_found';
+  if (!sawCname) reason = 'no_cname_record';
+  else if (reachedMaxDepth) reason = 'max_chain_depth_reached';
+  else if (loopDetected) reason = 'cname_loop_detected';
+
+  return {
+    ok: false,
+    chain,
+    resolvedIps: Array.from(resolvedIps),
+    reason,
+    reachedMaxDepth,
+    loopDetected
+  };
 }
 
 function capAndSanitizeHosts(rawHosts) {
@@ -142,6 +289,7 @@ async function checkEmail(target) {
   const apexName = normalizeHost(target);
   const dmarcName = `_dmarc.${apexName}`;
   const expectedCname = normalizeHost(config.UI_CNAME_EXPECTED);
+  const authorizedCnameIps = (config.UI_CNAME_AUTHORIZED_IPS || []).map(normalizeIp).filter(Boolean);
   const expectedMxHost = normalizeHost(config.EMAIL_MX_EXPECTED_HOST);
   const expectedMxPriority = config.EMAIL_MX_EXPECTED_PRIORITY;
   const expectedSpf = config.EMAIL_SPF_EXPECTED;
@@ -152,11 +300,15 @@ async function checkEmail(target) {
   const txtApex = await resolveTxtSafe(apexName);
   const txtDmarc = await resolveTxtSafe(dmarcName);
 
-  const cnameOk = cnameRecords.some((record) => normalizeHost(record) === expectedCname);
+  const directCnameOk = cnameRecords.some((record) => normalizeHost(record) === expectedCname);
+  const cnameChainResolution = authorizedCnameIps.length > 0
+    ? await resolveCnameChainToAuthorizedIp(apexName, authorizedCnameIps, config.UI_CNAME_MAX_CHAIN_DEPTH)
+    : null;
+  const cnameOk = cnameChainResolution ? cnameChainResolution.ok : directCnameOk;
   const mxOk = mxRecords.some(
     (rec) => rec.exchange === expectedMxHost && rec.priority === expectedMxPriority
   );
-  const spfOk = txtApex.includes(expectedSpf);
+  const spfOk = isSpfSatisfied(txtApex, expectedSpf);
   const dmarcOk = txtDmarc.includes(expectedDmarc);
 
   const cnameMeta = capAndSanitizeHosts(cnameRecords);
@@ -177,7 +329,8 @@ async function checkEmail(target) {
       expected: expectedCname,
       found: cnameMeta.values,
       ok: cnameOk,
-      found_truncated: cnameTruncated
+      found_truncated: cnameTruncated,
+      expected_ips: authorizedCnameIps.length > 0 ? authorizedCnameIps : undefined
     },
     {
       key: 'MX',
@@ -209,6 +362,7 @@ async function checkEmail(target) {
   ];
 
   const snapshot = {
+    cname_validation_mode: cnameChainResolution ? 'authorized_ip_chain' : 'expected_cname',
     cname: cnameMeta.values,
     cname_count: cnameMeta.total,
     cname_truncated: cnameTruncated,
@@ -222,6 +376,29 @@ async function checkEmail(target) {
     txt_dmarc_count: txtDmarcMeta.total,
     txt_dmarc_truncated: dmarcTruncated
   };
+
+  if (authorizedCnameIps.length > 0) {
+    const authorizedIpsMeta = capAndSanitizeHosts(authorizedCnameIps);
+    snapshot.cname_authorized_ips = authorizedIpsMeta.values;
+    snapshot.cname_authorized_ips_count = authorizedIpsMeta.total;
+    snapshot.cname_authorized_ips_truncated = authorizedIpsMeta.truncated || authorizedIpsMeta.valueTruncated;
+  }
+
+  if (cnameChainResolution) {
+    const chainMeta = capAndSanitizeHosts(cnameChainResolution.chain || []);
+    const resolvedIpsMeta = capAndSanitizeHosts(cnameChainResolution.resolvedIps || []);
+    snapshot.cname_chain = chainMeta.values;
+    snapshot.cname_chain_count = chainMeta.total;
+    snapshot.cname_chain_truncated = chainMeta.truncated || chainMeta.valueTruncated;
+    snapshot.cname_chain_reason = cnameChainResolution.reason;
+    snapshot.cname_chain_max_depth = config.UI_CNAME_MAX_CHAIN_DEPTH;
+    snapshot.cname_chain_reached_max_depth = Boolean(cnameChainResolution.reachedMaxDepth);
+    snapshot.cname_chain_loop_detected = Boolean(cnameChainResolution.loopDetected);
+    snapshot.cname_chain_resolved_ips = resolvedIpsMeta.values;
+    snapshot.cname_chain_resolved_ips_count = resolvedIpsMeta.total;
+    snapshot.cname_chain_resolved_ips_truncated =
+      resolvedIpsMeta.truncated || resolvedIpsMeta.valueTruncated;
+  }
 
   if (cnameMeta.hash) snapshot.cname_hash = cnameMeta.hash;
   if (mxMeta.hash) snapshot.mx_hash = mxMeta.hash;

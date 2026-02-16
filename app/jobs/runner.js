@@ -5,6 +5,7 @@ const mailer = require('../mailer');
 const { now, addSeconds, log } = require('../util/time');
 const { buildResultPayload } = require('../util/result');
 const { sanitizeForLogAndEmail } = require('../util/sanitize');
+const { markDomainAsActive } = require('../util/domain-activation');
 
 const jobs = new Map();
 const queue = [];
@@ -95,6 +96,10 @@ async function updateStatus(row, status, failReason, lastResult) {
     });
   } catch (err) {
     log(`Failed to send status email for ${row.type} ${row.target}: ${err.message}`);
+  }
+
+  if (status === 'ACTIVE') {
+    await markDomainAsActive(row.target);
   }
 
   return true;

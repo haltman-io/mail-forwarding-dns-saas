@@ -3,7 +3,7 @@ const db = require('../db');
 const config = require('../config');
 const { normalizeTarget } = require('../util/domain');
 const { toIso, log } = require('../util/time');
-const { checkUi, checkEmail } = require('../dns/checker');
+const { checkEmail } = require('../dns/checker');
 
 const router = express.Router();
 const readOnlyChecks = new Map();
@@ -46,21 +46,16 @@ function withMissingNames(missing, target) {
   });
 }
 
-function fallbackMissing(type, target) {
-  if (type === 'UI') {
-    return [
-      {
-        key: 'CNAME',
-        type: 'CNAME',
-        name: target,
-        expected: config.UI_CNAME_EXPECTED,
-        found: [],
-        ok: false
-      }
-    ];
-  }
-
+function fallbackMissing(target) {
   return [
+    {
+      key: 'CNAME',
+      type: 'CNAME',
+      name: target,
+      expected: config.UI_CNAME_EXPECTED,
+      found: [],
+      ok: false
+    },
     {
       key: 'MX',
       type: 'MX',
@@ -114,27 +109,46 @@ function canRunReadOnlyCheck(type, target, lastCheckedAt) {
   return true;
 }
 
-async function getMissingForRow(row, type, target) {
+function ensureUnifiedMissing(missing, target) {
+  const base = withMissingNames(missing, target);
+  const fallbackByKey = new Map(fallbackMissing(target).map((item) => [String(item.key).toUpperCase(), item]));
+  const foundByKey = new Map();
+
+  if (Array.isArray(base)) {
+    for (const item of base) {
+      if (!item || typeof item !== 'object') continue;
+      const normalizedKey = typeof item.key === 'string' ? item.key.toUpperCase() : '';
+      if (!normalizedKey) continue;
+      foundByKey.set(normalizedKey, item);
+    }
+  }
+
+  return ['CNAME', 'MX', 'SPF', 'DMARC'].map(
+    (key) => foundByKey.get(key) || fallbackByKey.get(key)
+  );
+}
+
+async function getMissingForRow(row, target) {
   if (!row) return null;
   if (row.last_check_result_json) {
     try {
       const parsed = JSON.parse(row.last_check_result_json);
-      if (parsed && parsed.missing) return withMissingNames(parsed.missing, target);
+      if (parsed && parsed.missing) return ensureUnifiedMissing(parsed.missing, target);
     } catch (err) {
-      log(`Failed to parse last_check_result_json for ${type} ${target}: ${err.message}`);
+      log(`Failed to parse last_check_result_json for EMAIL ${target}: ${err.message}`);
     }
   }
 
   const lastCheckedAt = row.last_checked_at ? new Date(row.last_checked_at) : null;
-  if (!canRunReadOnlyCheck(type, target, lastCheckedAt)) {
-    return fallbackMissing(type, target);
+  if (!canRunReadOnlyCheck('EMAIL', target, lastCheckedAt)) {
+    return fallbackMissing(target);
   }
   try {
-    const check = type === 'UI' ? await checkUi(target) : await checkEmail(target);
-    return withMissingNames(check.missing, target);
+    const check = await checkEmail(target);
+    return ensureUnifiedMissing(check.missing, target);
   } catch (err) {
-    log(`Read-only DNS check failed for ${type} ${target}: ${err.message}`);
-    return fallbackMissing(type, target);
+    log(`Read-only DNS check failed for EMAIL ${target}: ${err.message}`);
+    return fallbackMissing(target);
   }
 }
 
@@ -173,36 +187,27 @@ router.get('/api/checkdns/:target', async (req, res, next) => {
       return res.status(404).json({ error: 'not_found', target: normalized });
     }
 
-    const uiRow = rows.find((row) => row.type === 'UI') || null;
-    const emailRow = rows.find((row) => row.type === 'EMAIL') || null;
+    const emailRow = rows.find((row) => row.type === 'EMAIL') || rows.find((row) => row.type === 'UI') || null;
+    const emailMissing = await getMissingForRow(emailRow, normalized);
 
-    const uiMissing = await getMissingForRow(uiRow, 'UI', normalized);
-    const emailMissing = await getMissingForRow(emailRow, 'EMAIL', normalized);
-
-    const statuses = [uiRow ? uiRow.status : null, emailRow ? emailRow.status : null].filter(Boolean);
-    let overallStatus = 'NONE';
-    if (statuses.length === 1) {
-      overallStatus = statuses[0];
-    } else if (statuses.length === 2) {
-      overallStatus = statuses[0] === statuses[1] ? statuses[0] : 'MIXED';
-    }
-
-    const expiresAtMin = minDate(rows.map((row) => row.expires_at));
-    const lastCheckedMax = maxDate(rows.map((row) => row.last_checked_at));
-    const nextCheckMin = minDate(rows.map((row) => row.next_check_at));
+    const overallStatus = emailRow ? emailRow.status : 'NONE';
+    const scopedRows = emailRow ? [emailRow] : [];
+    const expiresAtMin = minDate(scopedRows.map((row) => row.expires_at));
+    const lastCheckedMax = maxDate(scopedRows.map((row) => row.last_checked_at));
+    const nextCheckMin = minDate(scopedRows.map((row) => row.next_check_at));
 
     return res.status(200).json({
       target: normalized,
       normalized_target: normalized,
       summary: {
-        has_ui: Boolean(uiRow),
+        has_ui: false,
         has_email: Boolean(emailRow),
         overall_status: overallStatus,
         expires_at_min: toIso(expiresAtMin),
         last_checked_at_max: toIso(lastCheckedMax),
         next_check_at_min: toIso(nextCheckMin)
       },
-      ui: buildRowResponse(uiRow, uiMissing),
+      ui: null,
       email: buildRowResponse(emailRow, emailMissing)
     });
   } catch (err) {

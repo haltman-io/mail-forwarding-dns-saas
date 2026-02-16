@@ -135,70 +135,50 @@ function capAndSanitizeTxt(rawTxt) {
 }
 
 async function checkUi(target) {
-  const queryName = normalizeHost(target);
-  const expected = normalizeHost(config.UI_CNAME_EXPECTED);
-  const cnameRecords = await resolveCnameSafe(queryName);
-  const ok = cnameRecords.some((record) => normalizeHost(record) === expected);
-
-  const cnameMeta = capAndSanitizeHosts(cnameRecords);
-  const cnameTruncated = cnameMeta.truncated || cnameMeta.valueTruncated;
-
-  const missing = [
-    {
-      key: 'CNAME',
-      type: 'CNAME',
-      name: queryName,
-      expected: expected,
-      found: cnameMeta.values,
-      ok,
-      found_truncated: cnameTruncated
-    }
-  ];
-
-  const snapshot = {
-    cname: cnameMeta.values,
-    cname_count: cnameMeta.total,
-    cname_truncated: cnameTruncated
-  };
-
-  if (cnameMeta.hash) {
-    snapshot.cname_hash = cnameMeta.hash;
-  }
-
-  return {
-    ok,
-    missing,
-    snapshot
-  };
+  return checkEmail(target);
 }
 
 async function checkEmail(target) {
   const apexName = normalizeHost(target);
   const dmarcName = `_dmarc.${apexName}`;
+  const expectedCname = normalizeHost(config.UI_CNAME_EXPECTED);
   const expectedMxHost = normalizeHost(config.EMAIL_MX_EXPECTED_HOST);
   const expectedMxPriority = config.EMAIL_MX_EXPECTED_PRIORITY;
   const expectedSpf = config.EMAIL_SPF_EXPECTED;
   const expectedDmarc = config.EMAIL_DMARC_EXPECTED;
 
+  const cnameRecords = await resolveCnameSafe(apexName);
   const mxRecords = await resolveMxSafe(apexName);
   const txtApex = await resolveTxtSafe(apexName);
   const txtDmarc = await resolveTxtSafe(dmarcName);
 
+  const cnameOk = cnameRecords.some((record) => normalizeHost(record) === expectedCname);
   const mxOk = mxRecords.some(
     (rec) => rec.exchange === expectedMxHost && rec.priority === expectedMxPriority
   );
   const spfOk = txtApex.includes(expectedSpf);
   const dmarcOk = txtDmarc.includes(expectedDmarc);
 
+  const cnameMeta = capAndSanitizeHosts(cnameRecords);
   const mxMeta = capAndSanitizeMx(mxRecords);
   const txtApexMeta = capAndSanitizeTxt(txtApex);
   const txtDmarcMeta = capAndSanitizeTxt(txtDmarc);
 
+  const cnameTruncated = cnameMeta.truncated || cnameMeta.valueTruncated;
   const mxTruncated = mxMeta.truncated || mxMeta.valueTruncated;
   const spfTruncated = txtApexMeta.truncated || txtApexMeta.valueTruncated;
   const dmarcTruncated = txtDmarcMeta.truncated || txtDmarcMeta.valueTruncated;
 
   const missing = [
+    {
+      key: 'CNAME',
+      type: 'CNAME',
+      name: apexName,
+      expected: expectedCname,
+      found: cnameMeta.values,
+      ok: cnameOk,
+      found_truncated: cnameTruncated
+    },
     {
       key: 'MX',
       type: 'MX',
@@ -229,6 +209,9 @@ async function checkEmail(target) {
   ];
 
   const snapshot = {
+    cname: cnameMeta.values,
+    cname_count: cnameMeta.total,
+    cname_truncated: cnameTruncated,
     mx: mxMeta.values,
     mx_count: mxMeta.total,
     mx_truncated: mxTruncated,
@@ -240,12 +223,13 @@ async function checkEmail(target) {
     txt_dmarc_truncated: dmarcTruncated
   };
 
+  if (cnameMeta.hash) snapshot.cname_hash = cnameMeta.hash;
   if (mxMeta.hash) snapshot.mx_hash = mxMeta.hash;
   if (txtApexMeta.hash) snapshot.txt_apex_hash = txtApexMeta.hash;
   if (txtDmarcMeta.hash) snapshot.txt_dmarc_hash = txtDmarcMeta.hash;
 
   return {
-    ok: mxOk && spfOk && dmarcOk,
+    ok: cnameOk && mxOk && spfOk && dmarcOk,
     missing,
     snapshot
   };

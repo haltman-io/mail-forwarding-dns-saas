@@ -1,6 +1,6 @@
 const config = require('../config');
 const db = require('../db');
-const { checkUi, checkEmail } = require('../dns/checker');
+const { checkEmail } = require('../dns/checker');
 const mailer = require('../mailer');
 const { now, addSeconds, log } = require('../util/time');
 const { buildResultPayload } = require('../util/result');
@@ -125,7 +125,7 @@ async function runCheck(requestId, key) {
       return;
     }
 
-    const check = row.type === 'UI' ? await checkUi(row.target) : await checkEmail(row.target);
+    const check = await checkEmail(row.target);
     const nextCheckAt = addSeconds(nowDate, config.DNS_POLL_INTERVAL_SECONDS);
     const { payload, json } = buildResultPayload(check, nowDate, nextCheckAt);
 

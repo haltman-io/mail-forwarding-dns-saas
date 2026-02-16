@@ -32,16 +32,10 @@ async function sendAdminMail(subject, text) {
   });
 }
 
-function buildCriteriaText(type) {
-  if (type === 'UI') {
-    return [
-      'UI CNAME requirements:',
-      `- CNAME must include: ${sanitizeForLogAndEmail(config.UI_CNAME_EXPECTED, 200)}`
-    ].join('\n');
-  }
-
+function buildCriteriaText() {
   return [
     'Email forwarding DNS requirements:',
+    `- CNAME must include: ${sanitizeForLogAndEmail(config.UI_CNAME_EXPECTED, 200)}`,
     `- MX must include: ${sanitizeForLogAndEmail(config.EMAIL_MX_EXPECTED_HOST, 200)} priority ${sanitizeForLogAndEmail(config.EMAIL_MX_EXPECTED_PRIORITY, 50)}`,
     `- SPF TXT must include: ${sanitizeForLogAndEmail(config.EMAIL_SPF_EXPECTED, 200)}`,
     `- DMARC TXT must include: ${sanitizeForLogAndEmail(config.EMAIL_DMARC_EXPECTED, 200)}`
@@ -59,7 +53,7 @@ async function sendRequestCreated(details) {
     `timestamp: ${sanitizeForLogAndEmail(toIso(now()), 50)}`,
     `expires_at: ${sanitizeForLogAndEmail(toIso(details.expires_at), 50)}`,
     '',
-    buildCriteriaText(details.type)
+    buildCriteriaText()
   ];
 
   const subject = `[DNS] Request created: ${sanitizeForLogAndEmail(details.type, 50)} ${sanitizeForLogAndEmail(details.target, 100)}`;

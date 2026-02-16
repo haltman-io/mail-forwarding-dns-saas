@@ -3,7 +3,7 @@ const db = require('../db');
 const config = require('../config');
 const { log, now, addHours, addSeconds } = require('../util/time');
 const { extractTargetFromBody } = require('../util/validators');
-const { checkUi, checkEmail } = require('../dns/checker');
+const { checkEmail } = require('../dns/checker');
 const jobs = require('../jobs/runner');
 const mailer = require('../mailer');
 const { buildResultPayload } = require('../util/result');
@@ -47,7 +47,7 @@ async function runImmediateCheck(row) {
   const nowDate = now();
   const nextCheckAt = addSeconds(nowDate, config.DNS_POLL_INTERVAL_SECONDS);
 
-  const check = row.type === 'UI' ? await checkUi(row.target) : await checkEmail(row.target);
+  const check = await checkEmail(row.target);
 
   const { payload, json } = buildResultPayload(check, nowDate, nextCheckAt);
 
@@ -145,7 +145,7 @@ async function handleRequest(type, req, res, next) {
   }
 }
 
-router.post('/request/ui', (req, res, next) => handleRequest('UI', req, res, next));
+router.post('/request/ui', (req, res, next) => handleRequest('EMAIL', req, res, next));
 router.post('/request/email', (req, res, next) => handleRequest('EMAIL', req, res, next));
 
 module.exports = router;

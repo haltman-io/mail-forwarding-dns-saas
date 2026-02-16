@@ -35,13 +35,49 @@ if (invalidServers.length > 0) {
   throw new Error(`Invalid DNS_SERVERS entries (must be IPs): ${invalidServers.join(', ')}`);
 }
 
+const dbPoolConnectionLimit = Math.max(
+  1,
+  toInt(process.env.DB_POOL_CONNECTION_LIMIT || '10', 'DB_POOL_CONNECTION_LIMIT')
+);
+const dbPoolAcquireTimeoutMs = Math.max(
+  1000,
+  toInt(process.env.DB_POOL_ACQUIRE_TIMEOUT_MS || '15000', 'DB_POOL_ACQUIRE_TIMEOUT_MS')
+);
+const dbPoolConnectTimeoutMs = Math.max(
+  500,
+  toInt(process.env.DB_POOL_CONNECT_TIMEOUT_MS || '10000', 'DB_POOL_CONNECT_TIMEOUT_MS')
+);
+const dbQueryRetryCount = Math.max(
+  0,
+  toInt(process.env.DB_QUERY_RETRY_COUNT || '2', 'DB_QUERY_RETRY_COUNT')
+);
+const dbQueryRetryDelayMs = Math.max(
+  0,
+  toInt(process.env.DB_QUERY_RETRY_DELAY_MS || '300', 'DB_QUERY_RETRY_DELAY_MS')
+);
+const maxActiveJobsRequested = toInt(
+  process.env.MAX_ACTIVE_JOBS || String(dbPoolConnectionLimit),
+  'MAX_ACTIVE_JOBS'
+);
+const maxActiveJobs = Math.max(1, Math.min(maxActiveJobsRequested, dbPoolConnectionLimit));
+const resumeStartupJitterMs = Math.max(
+  0,
+  toInt(process.env.RESUME_STARTUP_JITTER_MS || '5000', 'RESUME_STARTUP_JITTER_MS')
+);
+
 const config = {
+  HOST: process.env.HOST || '0.0.0.0',
   PORT: toInt(requireEnv('PORT'), 'PORT'),
   DB_HOST: requireEnv('DB_HOST'),
   DB_USER: requireEnv('DB_USER'),
   DB_PASS: requireEnv('DB_PASS'),
   DB_NAME: requireEnv('DB_NAME'),
   DB_PORT: toInt(requireEnv('DB_PORT'), 'DB_PORT'),
+  DB_POOL_CONNECTION_LIMIT: dbPoolConnectionLimit,
+  DB_POOL_ACQUIRE_TIMEOUT_MS: dbPoolAcquireTimeoutMs,
+  DB_POOL_CONNECT_TIMEOUT_MS: dbPoolConnectTimeoutMs,
+  DB_QUERY_RETRY_COUNT: dbQueryRetryCount,
+  DB_QUERY_RETRY_DELAY_MS: dbQueryRetryDelayMs,
 
   ADMIN_EMAIL_TO: requireEnv('ADMIN_EMAIL_TO'),
   SMTP_HOST: requireEnv('SMTP_HOST'),
@@ -64,7 +100,9 @@ const config = {
     'CHECKDNS_MIN_INTERVAL_SECONDS'
   ),
 
-  MAX_ACTIVE_JOBS: toInt(process.env.MAX_ACTIVE_JOBS || '100', 'MAX_ACTIVE_JOBS'),
+  MAX_ACTIVE_JOBS: maxActiveJobs,
+  MAX_ACTIVE_JOBS_REQUESTED: maxActiveJobsRequested,
+  RESUME_STARTUP_JITTER_MS: resumeStartupJitterMs,
   TARGET_COOLDOWN_SECONDS: toInt(process.env.TARGET_COOLDOWN_SECONDS || '60', 'TARGET_COOLDOWN_SECONDS'),
   RESULT_JSON_MAX_BYTES: toInt(process.env.RESULT_JSON_MAX_BYTES || '20000', 'RESULT_JSON_MAX_BYTES'),
   EMAIL_BODY_MAX_LENGTH: toInt(process.env.EMAIL_BODY_MAX_LENGTH || '8000', 'EMAIL_BODY_MAX_LENGTH'),

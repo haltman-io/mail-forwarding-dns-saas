@@ -27,11 +27,12 @@ function stopJob(key) {
   drainQueue();
 }
 
-function enqueue(row) {
+function enqueue(row, options = {}) {
   const key = getKey(row.type, row.target);
   if (jobs.has(key) || queuedKeys.has(key)) return;
+  const initialDelayMs = Math.max(0, Number(options.initialDelayMs) || 0);
   queuedKeys.add(key);
-  queue.push({ id: row.id, type: row.type, target: row.target });
+  queue.push({ id: row.id, type: row.type, target: row.target, initialDelayMs });
   log(`Job queued for ${key}`);
 }
 
@@ -40,7 +41,7 @@ function drainQueue() {
     const row = queue.shift();
     const key = getKey(row.type, row.target);
     queuedKeys.delete(key);
-    startJob(row);
+    startJob(row, { initialDelayMs: row.initialDelayMs });
   }
 }
 
@@ -160,38 +161,48 @@ async function runCheck(requestId, key) {
   }
 }
 
-function startJob(row) {
+function startJob(row, options = {}) {
   const key = getKey(row.type, row.target);
   if (jobs.has(key)) return;
 
   const intervalMs = config.DNS_POLL_INTERVAL_SECONDS * 1000;
+  const initialDelayMs = Math.max(0, Number(options.initialDelayMs) || 0);
   const state = {
     running: false,
     intervalId: null
   };
 
   const tick = () => runCheck(row.id, key);
+  const runTickWithLog = (label) => {
+    tick().catch((err) => log(`${label} for ${key}: ${err.message}`));
+  };
 
   state.intervalId = setInterval(() => {
-    tick().catch((err) => log(`Job tick failed for ${key}: ${err.message}`));
+    runTickWithLog('Job tick failed');
   }, intervalMs);
 
   jobs.set(key, state);
   log(`Job started for ${key}`);
 
-  tick().catch((err) => log(`Immediate check failed for ${key}: ${err.message}`));
+  if (initialDelayMs > 0) {
+    setTimeout(() => {
+      runTickWithLog('Initial delayed check failed');
+    }, initialDelayMs).unref();
+  } else {
+    runTickWithLog('Immediate check failed');
+  }
 }
 
-function startForRequest(row) {
+function startForRequest(row, options = {}) {
   const key = getKey(row.type, row.target);
   if (jobs.has(key)) return;
 
   if (!canStartJob()) {
-    enqueue(row);
+    enqueue(row, options);
     return;
   }
 
-  startJob(row);
+  startJob(row, options);
 }
 
 async function resumePending() {
@@ -199,8 +210,15 @@ async function resumePending() {
     "SELECT * FROM dns_requests WHERE status = 'PENDING' AND expires_at > NOW()"
   );
 
+  const intervalMs = config.DNS_POLL_INTERVAL_SECONDS * 1000;
+  const jitterCapMs = Math.max(
+    0,
+    Math.min(config.RESUME_STARTUP_JITTER_MS, Math.max(intervalMs - 100, 0))
+  );
+
   for (const row of rows) {
-    startForRequest(row);
+    const initialDelayMs = jitterCapMs > 0 ? Math.floor(Math.random() * (jitterCapMs + 1)) : 0;
+    startForRequest(row, { initialDelayMs });
   }
 
   drainQueue();

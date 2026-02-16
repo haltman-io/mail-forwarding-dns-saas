@@ -61,6 +61,11 @@ app.use((req, res, next) => {
 app.use(requestRoutes);
 app.use(checkdnsRoutes);
 
+// ── Health check ────────────────────────────────────────────
+app.get('/healthz', (_req, res) => {
+  res.status(200).json({ status: 'ok', uptime: process.uptime() });
+});
+
 app.use((err, req, res, next) => {
   const status = err.status || (err.type === 'entity.parse.failed' ? 400 : 500);
   const isClientError = status >= 400 && status < 500;
@@ -74,9 +79,43 @@ app.use((err, req, res, next) => {
   return res.status(status).json({ error: message });
 });
 
-app.listen(config.PORT, () => {
-  log(`Server listening on port ${config.PORT}`);
+const server = app.listen(config.PORT, config.HOST, () => {
+  log(`Server listening on ${config.HOST}:${config.PORT}`);
+  if (config.MAX_ACTIVE_JOBS !== config.MAX_ACTIVE_JOBS_REQUESTED) {
+    log(
+      `MAX_ACTIVE_JOBS reduced from ${config.MAX_ACTIVE_JOBS_REQUESTED} to ${config.MAX_ACTIVE_JOBS} to match DB pool limit`
+    );
+  }
+  log(
+    `DB pool configured: connection_limit=${config.DB_POOL_CONNECTION_LIMIT}, acquire_timeout_ms=${config.DB_POOL_ACQUIRE_TIMEOUT_MS}, connect_timeout_ms=${config.DB_POOL_CONNECT_TIMEOUT_MS}`
+  );
+  log(
+    `DB query retry configured: retry_count=${config.DB_QUERY_RETRY_COUNT}, retry_delay_ms=${config.DB_QUERY_RETRY_DELAY_MS}`
+  );
   jobs.resumePending().catch((err) => {
     log(`Failed to resume jobs: ${err.message}`);
   });
 });
+
+// ── Graceful shutdown ───────────────────────────────────────
+const { pool } = require('./db');
+
+function shutdown(signal) {
+  log(`Received ${signal}, shutting down gracefully…`);
+  server.close(() => log('HTTP server closed'));
+  pool.end().then(() => {
+    log('DB pool closed');
+    process.exit(0);
+  }).catch((err) => {
+    log(`Error closing DB pool: ${err.message}`);
+    process.exit(1);
+  });
+  // Force exit after 10 s
+  setTimeout(() => {
+    log('Forced exit after timeout');
+    process.exit(1);
+  }, 10_000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

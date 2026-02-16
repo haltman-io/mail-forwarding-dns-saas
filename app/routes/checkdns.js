@@ -20,11 +20,39 @@ function maxDate(dates) {
   return new Date(Math.max(...filtered.map((d) => d.getTime())));
 }
 
-function fallbackMissing(type) {
+function missingNameForKey(key, target) {
+  const normalizedKey = typeof key === 'string' ? key.toUpperCase() : '';
+  if (normalizedKey === 'DMARC') return `_dmarc.${target}`;
+  return target;
+}
+
+function missingTypeForKey(key) {
+  const normalizedKey = typeof key === 'string' ? key.toUpperCase() : '';
+  if (normalizedKey === 'SPF' || normalizedKey === 'DMARC') return 'TXT';
+  if (normalizedKey === 'MX') return 'MX';
+  if (normalizedKey === 'CNAME') return 'CNAME';
+  return normalizedKey || 'UNKNOWN';
+}
+
+function withMissingNames(missing, target) {
+  if (!Array.isArray(missing)) return missing;
+  return missing.map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    return {
+      ...item,
+      name: item.name || missingNameForKey(item.key, target),
+      type: missingTypeForKey(item.key)
+    };
+  });
+}
+
+function fallbackMissing(type, target) {
   if (type === 'UI') {
     return [
       {
         key: 'CNAME',
+        type: 'CNAME',
+        name: target,
         expected: config.UI_CNAME_EXPECTED,
         found: [],
         ok: false
@@ -35,18 +63,24 @@ function fallbackMissing(type) {
   return [
     {
       key: 'MX',
+      type: 'MX',
+      name: target,
       expected: { host: config.EMAIL_MX_EXPECTED_HOST, priority: config.EMAIL_MX_EXPECTED_PRIORITY },
       found: [],
       ok: false
     },
     {
       key: 'SPF',
+      type: 'TXT',
+      name: target,
       expected: config.EMAIL_SPF_EXPECTED,
       found: [],
       ok: false
     },
     {
       key: 'DMARC',
+      type: 'TXT',
+      name: `_dmarc.${target}`,
       expected: config.EMAIL_DMARC_EXPECTED,
       found: [],
       ok: false
@@ -85,7 +119,7 @@ async function getMissingForRow(row, type, target) {
   if (row.last_check_result_json) {
     try {
       const parsed = JSON.parse(row.last_check_result_json);
-      if (parsed && parsed.missing) return parsed.missing;
+      if (parsed && parsed.missing) return withMissingNames(parsed.missing, target);
     } catch (err) {
       log(`Failed to parse last_check_result_json for ${type} ${target}: ${err.message}`);
     }
@@ -93,14 +127,14 @@ async function getMissingForRow(row, type, target) {
 
   const lastCheckedAt = row.last_checked_at ? new Date(row.last_checked_at) : null;
   if (!canRunReadOnlyCheck(type, target, lastCheckedAt)) {
-    return fallbackMissing(type);
+    return fallbackMissing(type, target);
   }
   try {
     const check = type === 'UI' ? await checkUi(target) : await checkEmail(target);
-    return check.missing;
+    return withMissingNames(check.missing, target);
   } catch (err) {
     log(`Read-only DNS check failed for ${type} ${target}: ${err.message}`);
-    return fallbackMissing(type);
+    return fallbackMissing(type, target);
   }
 }
 

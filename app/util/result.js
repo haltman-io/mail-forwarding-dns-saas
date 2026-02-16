@@ -27,6 +27,8 @@ function summarizeMissing(missing) {
     if (!item || typeof item !== 'object') return item;
     return {
       key: item.key,
+      type: item.type,
+      name: item.name,
       expected: item.expected,
       ok: item.ok,
       found: Array.isArray(item.found) ? item.found.slice(0, 3) : [],
@@ -59,6 +61,8 @@ function ensureResultSize(payload) {
     missing: Array.isArray(trimmed.missing)
       ? trimmed.missing.map((item) => ({
           key: item.key,
+          type: item.type,
+          name: item.name,
           expected: item.expected,
           ok: item.ok,
           found: [],

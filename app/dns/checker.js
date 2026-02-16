@@ -135,8 +135,9 @@ function capAndSanitizeTxt(rawTxt) {
 }
 
 async function checkUi(target) {
+  const queryName = normalizeHost(target);
   const expected = normalizeHost(config.UI_CNAME_EXPECTED);
-  const cnameRecords = await resolveCnameSafe(target);
+  const cnameRecords = await resolveCnameSafe(queryName);
   const ok = cnameRecords.some((record) => normalizeHost(record) === expected);
 
   const cnameMeta = capAndSanitizeHosts(cnameRecords);
@@ -145,6 +146,8 @@ async function checkUi(target) {
   const missing = [
     {
       key: 'CNAME',
+      type: 'CNAME',
+      name: queryName,
       expected: expected,
       found: cnameMeta.values,
       ok,
@@ -170,14 +173,16 @@ async function checkUi(target) {
 }
 
 async function checkEmail(target) {
+  const apexName = normalizeHost(target);
+  const dmarcName = `_dmarc.${apexName}`;
   const expectedMxHost = normalizeHost(config.EMAIL_MX_EXPECTED_HOST);
   const expectedMxPriority = config.EMAIL_MX_EXPECTED_PRIORITY;
   const expectedSpf = config.EMAIL_SPF_EXPECTED;
   const expectedDmarc = config.EMAIL_DMARC_EXPECTED;
 
-  const mxRecords = await resolveMxSafe(target);
-  const txtApex = await resolveTxtSafe(target);
-  const txtDmarc = await resolveTxtSafe(`_dmarc.${target}`);
+  const mxRecords = await resolveMxSafe(apexName);
+  const txtApex = await resolveTxtSafe(apexName);
+  const txtDmarc = await resolveTxtSafe(dmarcName);
 
   const mxOk = mxRecords.some(
     (rec) => rec.exchange === expectedMxHost && rec.priority === expectedMxPriority
@@ -196,6 +201,8 @@ async function checkEmail(target) {
   const missing = [
     {
       key: 'MX',
+      type: 'MX',
+      name: apexName,
       expected: { host: expectedMxHost, priority: expectedMxPriority },
       found: mxMeta.values,
       ok: mxOk,
@@ -203,6 +210,8 @@ async function checkEmail(target) {
     },
     {
       key: 'SPF',
+      type: 'TXT',
+      name: apexName,
       expected: expectedSpf,
       found: txtApexMeta.values,
       ok: spfOk,
@@ -210,6 +219,8 @@ async function checkEmail(target) {
     },
     {
       key: 'DMARC',
+      type: 'TXT',
+      name: dmarcName,
       expected: expectedDmarc,
       found: txtDmarcMeta.values,
       ok: dmarcOk,

@@ -151,7 +151,10 @@ async function handleRequest(type, req, res, next) {
   }
 }
 
-router.post('/request/ui', (req, res, next) => handleRequest('EMAIL', req, res, next));
+router.post('/request/ui', (_req, res) => res.status(410).json({
+  error: 'endpoint_removed',
+  message: 'Use /request/email. /request/ui is no longer supported.'
+}));
 router.post('/request/email', (req, res, next) => handleRequest('EMAIL', req, res, next));
 
 module.exports = router;

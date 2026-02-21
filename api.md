@@ -53,9 +53,18 @@ If invalid: `400` with a technical error message.
 
 ---
 
-# 1) POST /request/ui
+# 1) POST /request/email
 
-**Purpose:** Start UI CNAME validation.
+**Purpose:** Start email forwarding DNS validation.
+
+### Deprecated Endpoint
+`POST /request/ui` is disabled and returns:
+```json
+{
+  "error": "endpoint_removed",
+  "message": "Use /request/email. /request/ui is no longer supported."
+}
+```
 
 ### Request Body
 ```json
@@ -65,31 +74,31 @@ If invalid: `400` with a technical error message.
 ```
 
 ### Success Responses
-- `202 Accepted` if request created and pending:
+- `202 Accepted` (most common) or `200 OK` if already correct:
 ```json
 {
   "id": 1,
   "target": "example.com",
-  "type": "UI",
+  "type": "EMAIL",
   "status": "PENDING",
   "expires_at": "2026-01-30T08:10:18.770Z"
 }
 ```
 
-- `200 OK` if DNS is already correct (rare, immediate success):
-```json
-{
-  "id": 1,
-  "target": "example.com",
-  "type": "UI",
-  "status": "ACTIVE",
-  "expires_at": "2026-01-30T08:10:18.770Z"
-}
-```
-
-### CNAME Requirements
-- CNAME for `target` must include `UI_CNAME_EXPECTED` (default `forward.haltman.io`).
-- Trailing dots are ignored during comparison.
+### Email Requirements
+For the apex domain (`example.com`):
+1. CNAME record for `example.com` must satisfy:
+   - `UI_CNAME_EXPECTED` (default `forward.haltman.io`), or
+   - if `UI_CNAME_AUTHORIZED_IPS` is set, CNAME chain must resolve to one of those IPs.
+2. MX record includes:
+   - `EMAIL_MX_EXPECTED_HOST` (default `mail.abin.lat`)
+   - `EMAIL_MX_EXPECTED_PRIORITY` (default `10`)
+3. TXT (SPF) must **exactly** match:
+   - `EMAIL_SPF_EXPECTED` (default `v=spf1 include:_spf.abin.lat mx -all`)
+4. TXT (DMARC) at `_dmarc.example.com` must **exactly** match:
+   - `EMAIL_DMARC_EXPECTED` (default `v=DMARC1; p=none`)
+5. DKIM CNAME at `<EMAIL_DKIM_SELECTOR>._domainkey.example.com` must match:
+   - `EMAIL_DKIM_CNAME_EXPECTED` (default `s1._domainkey.dkim.abin.lat`)
 
 ### Error Responses
 - `400` invalid input
@@ -101,36 +110,7 @@ If invalid: `400` with a technical error message.
 
 ---
 
-# 2) POST /request/email
-
-**Purpose:** Start email forwarding DNS validation.
-
-### Request Body
-```json
-{
-  "target": "example.com"
-}
-```
-
-### Success Responses
-- `202 Accepted` (most common) or `200 OK` if already correct (same structure as UI)
-
-### Email Requirements
-For the apex domain (`example.com`):
-1. MX record includes:
-   - `EMAIL_MX_EXPECTED_HOST` (default `mail.abin.lat`)
-   - `EMAIL_MX_EXPECTED_PRIORITY` (default `10`)
-2. TXT (SPF) must **exactly** match:
-   - `EMAIL_SPF_EXPECTED` (default `v=spf1 mx -all`)
-3. TXT (DMARC) at `_dmarc.example.com` must **exactly** match:
-   - `EMAIL_DMARC_EXPECTED` (default `v=DMARC1; p=none`)
-
-### Error Responses
-Same as `/request/ui`.
-
----
-
-# 3) GET /api/checkdns/:target
+# 2) GET /api/checkdns/:target
 
 **Purpose:** Poll for status & missing DNS items.
 
@@ -150,14 +130,15 @@ x-api-key: <CHECKDNS_TOKEN>
   "target": "example.com",
   "normalized_target": "example.com",
   "summary": {
-    "has_ui": true,
-    "has_email": false,
+    "has_ui": false,
+    "has_email": true,
     "overall_status": "PENDING",
     "expires_at_min": "2026-01-30T08:10:18.770Z",
     "last_checked_at_max": "2026-01-29T08:12:18.770Z",
     "next_check_at_min": "2026-01-29T08:17:18.770Z"
   },
-  "ui": {
+  "ui": null,
+  "email": {
     "status": "PENDING",
     "id": 1,
     "created_at": "2026-01-29T08:10:18.770Z",
@@ -173,23 +154,19 @@ x-api-key: <CHECKDNS_TOKEN>
         "found_truncated": false
       }
     ]
-  },
-  "email": null
+  }
 }
 ```
 
 ### Notes
-- If no rows exist for that target: `404` with `{ "error": "not_found", "target": "example.com" }`.
-- `ui` or `email` can be `null` if not created yet.
+- If no EMAIL row exists for that target: `404` with `{ "error": "not_found", "target": "example.com" }`.
 - If no prior DNS check exists, the endpoint may perform a **single read-only DNS check** but only if:
   - `last_checked_at` is older than `CHECKDNS_MIN_INTERVAL_SECONDS`, and
   - it hasn’t checked recently for that target in memory.
 - If throttled, it returns a fallback “missing” list with empty `found`.
 
 ### overall_status
-- If only one type exists: that status
-- If both exist and match: that status
-- If both exist but different: `"MIXED"`
+- Same as EMAIL row status.
 
 ---
 
@@ -204,7 +181,8 @@ Examples:
 - `400` invalid JSON → `{ "error": "invalid_json" }`
 - `400` validation → `{ "error": "target must be a domain name without scheme" }`
 - `401` unauthorized → `{ "error": "unauthorized" }`
-- `409` duplicate → `{ "error": "Duplicate request for UI example.com" }`
+- `409` duplicate → `{ "error": "Duplicate request for EMAIL example.com" }`
+- `410` removed endpoint → `{ "error": "endpoint_removed", "message": "Use /request/email. /request/ui is no longer supported." }`
 - `429` rate limit → `{ "error": "rate_limited", "message": "Too many requests" }`
 - `429` cooldown → `{ "error": "target is in cooldown window" }`
 - `503` → `{ "error": "server_busy", "message": "Too many active jobs" }`
@@ -213,19 +191,6 @@ Examples:
 ---
 
 ## DNS “Missing” Structure
-
-### UI missing
-```json
-[
-  {
-    "key": "CNAME",
-    "expected": "forward.haltman.io",
-    "found": ["..."],
-    "ok": false,
-    "found_truncated": false
-  }
-]
-```
 
 ### Email missing
 ```json
@@ -239,7 +204,7 @@ Examples:
   },
   {
     "key": "SPF",
-    "expected": "v=spf1 mx -all",
+    "expected": "v=spf1 include:_spf.abin.lat mx -all",
     "found": ["v=spf1 include:_spf.google.com ~all"],
     "ok": false,
     "found_truncated": false
@@ -259,13 +224,6 @@ If records are excessive or too long, `found_truncated: true`.
 ---
 
 ## Examples (curl)
-
-### UI request
-```bash
-curl -X POST http://localhost:3000/request/ui \
-  -H "Content-Type: application/json" \
-  -d '{"target":"example.com"}'
-```
 
 ### Email request
 ```bash
@@ -288,20 +246,6 @@ curl http://localhost:3000/api/checkdns/example.com \
 ---
 
 ## Examples (JavaScript / Fetch)
-
-### POST /request/ui
-```js
-async function requestUi(target) {
-  const res = await fetch('http://localhost:3000/request/ui', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ target })
-  });
-  const data = await res.json();
-  if (!res.ok) throw data;
-  return data;
-}
-```
 
 ### POST /request/email
 ```js

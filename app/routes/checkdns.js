@@ -200,7 +200,10 @@ router.get('/api/checkdns/:target', async (req, res, next) => {
       return res.status(404).json({ error: 'not_found', target: normalized });
     }
 
-    const emailRow = rows.find((row) => row.type === 'EMAIL') || rows.find((row) => row.type === 'UI') || null;
+    const emailRow = rows.find((row) => row.type === 'EMAIL') || null;
+    if (!emailRow) {
+      return res.status(404).json({ error: 'not_found', target: normalized });
+    }
     const emailMissing = await getMissingForRow(emailRow, normalized);
 
     const overallStatus = emailRow ? emailRow.status : 'NONE';

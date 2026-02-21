@@ -39,14 +39,10 @@ npm run sanity:domain
 
 ## API
 
-### Request UI validation (CNAME)
-```
-curl -X POST http://localhost:3000/request/ui \
-  -H "Content-Type: application/json" \
-  -d '{"target":"example.com"}'
-```
+### Deprecated endpoint
+`POST /request/ui` is disabled and returns `410 Gone`. Use `POST /request/email`.
 
-### Request Email forwarding validation (MX + SPF + DMARC)
+### Request Email forwarding validation (CNAME + MX + SPF + DMARC + DKIM)
 ```
 curl -X POST http://localhost:3000/request/email \
   -H "Content-Type: application/json" \
@@ -67,14 +63,15 @@ curl http://localhost:3000/api/checkdns/example.com
 
 ## /api/checkdns/:target
 
-- Read-only endpoint for polling UI.
-- Returns both UI and EMAIL records (if present) with missing items.
+- Read-only endpoint for polling EMAIL validation.
+- Returns the EMAIL record and its missing items.
 - If a row exists but has no `last_check_result_json` yet, the endpoint performs a single read-only DNS lookup to return a best-effort `missing` list. It does **not** create requests or start jobs.
 
 ## What ACTIVE Means
 
-- UI: The target domain has a CNAME that matches `UI_CNAME_EXPECTED` (default `forward.haltman.io`), ignoring case and trailing dots.
 - EMAIL: The target domain satisfies **all** of:
+  - CNAME record for `<target>` matching `UI_CNAME_EXPECTED` (or resolving to `UI_CNAME_AUTHORIZED_IPS` when set)
   - MX record with `EMAIL_MX_EXPECTED_HOST` and `EMAIL_MX_EXPECTED_PRIORITY`
   - SPF TXT record exactly matching `EMAIL_SPF_EXPECTED`
   - DMARC TXT record at `_dmarc.<target>` exactly matching `EMAIL_DMARC_EXPECTED`
+  - DKIM CNAME record at `<EMAIL_DKIM_SELECTOR>._domainkey.<target>` matching `EMAIL_DKIM_CNAME_EXPECTED`

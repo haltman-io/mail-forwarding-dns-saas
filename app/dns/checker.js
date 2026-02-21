@@ -41,42 +41,21 @@ function normalizeSpfRecord(value) {
   return value.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
-function isAllMechanism(token) {
-  return /^[+?~-]?all$/i.test(token || '');
+function normalizeDmarcRecord(value) {
+  if (typeof value !== 'string') return '';
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
-function getExpectedSpfMinimumTokens(expectedSpf) {
-  const normalized = normalizeSpfRecord(expectedSpf);
-  const tokens = normalized.split(' ').filter(Boolean);
-  if (tokens.length === 0 || tokens[0] !== 'v=spf1') return [];
-
-  const contentTokens = tokens.slice(1);
-  if (contentTokens.length === 0) return [];
-
-  const withoutPolicyAtEnd = isAllMechanism(contentTokens[contentTokens.length - 1])
-    ? contentTokens.slice(0, -1)
-    : contentTokens;
-
-  return withoutPolicyAtEnd.filter((token) => !isAllMechanism(token));
+function isExactSpfMatch(records, expectedSpf) {
+  const expected = normalizeSpfRecord(expectedSpf);
+  if (!expected) return false;
+  return records.some((record) => normalizeSpfRecord(record) === expected);
 }
 
-function isSpfRecordValidWithMinimum(record, requiredTokens) {
-  const normalized = normalizeSpfRecord(record);
-  const tokens = normalized.split(' ').filter(Boolean);
-
-  if (tokens.length < 2 || tokens[0] !== 'v=spf1') return false;
-  if (!isAllMechanism(tokens[tokens.length - 1])) return false;
-
-  const mechanisms = tokens.slice(1, -1).filter((token) => !isAllMechanism(token));
-  if (mechanisms.length === 0) return false;
-
-  const mechanismSet = new Set(mechanisms);
-  return requiredTokens.every((token) => mechanismSet.has(token));
-}
-
-function isSpfSatisfied(records, expectedSpf) {
-  const requiredTokens = getExpectedSpfMinimumTokens(expectedSpf);
-  return records.some((record) => isSpfRecordValidWithMinimum(record, requiredTokens));
+function isExactDmarcMatch(records, expectedDmarc) {
+  const expected = normalizeDmarcRecord(expectedDmarc);
+  if (!expected) return false;
+  return records.some((record) => normalizeDmarcRecord(record) === expected);
 }
 
 function hashValues(values) {
@@ -311,8 +290,8 @@ async function checkEmail(target) {
   const mxOk = mxRecords.some(
     (rec) => rec.exchange === expectedMxHost && rec.priority === expectedMxPriority
   );
-  const spfOk = isSpfSatisfied(txtApex, expectedSpf);
-  const dmarcOk = txtDmarc.includes(expectedDmarc);
+  const spfOk = isExactSpfMatch(txtApex, expectedSpf);
+  const dmarcOk = isExactDmarcMatch(txtDmarc, expectedDmarc);
   const dkimOk = dkimCnameRecords.some((record) => normalizeHost(record) === expectedDkimCname);
 
   const cnameMeta = capAndSanitizeHosts(cnameRecords);

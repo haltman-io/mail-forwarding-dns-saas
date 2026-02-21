@@ -130,7 +130,7 @@ const config = {
   EMAIL_DKIM_CNAME_EXPECTED: (
     process.env.EMAIL_DKIM_CNAME_EXPECTED || 's1._domainkey.dkim.abin.lat'
   ).toLowerCase(),
-  EMAIL_SPF_EXPECTED: process.env.EMAIL_SPF_EXPECTED || 'v=spf1 mx -all',
+  EMAIL_SPF_EXPECTED: process.env.EMAIL_SPF_EXPECTED || 'v=spf1 include:_spf.abin.lat mx -all',
   EMAIL_DMARC_EXPECTED: process.env.EMAIL_DMARC_EXPECTED || 'v=DMARC1; p=none'
 };
 
